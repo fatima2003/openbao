@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -164,6 +165,7 @@ func ParseForwardedRequest(fq *Request) (*http.Request, error) {
 			ret.TLS.PeerCertificates[i] = cert
 		}
 	}
+	fmt.Printf("\n --- ParseForwardedRequest ret: %v --- \n", ret)
 
 	return ret, nil
 }

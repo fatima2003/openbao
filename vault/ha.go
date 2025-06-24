@@ -395,6 +395,11 @@ func (c *Core) runStandby(doneCh, manualStepDownCh, stopCh chan struct{}) {
 	defer close(manualStepDownCh)
 	c.logger.Info("entering standby mode")
 
+	// !disable perf standby:
+	if err := c.promoteToPerfStandby(namespace.RootContext(nil)); err != nil {
+		c.logger.Error("failed to promote to performance standby", "error", err)
+	}
+
 	var g run.Group
 	newLeaderCh := addEnterpriseHaActors(c, &g)
 	{
@@ -461,6 +466,7 @@ func (c *Core) runStandby(doneCh, manualStepDownCh, stopCh chan struct{}) {
 // is enabled. It waits until we are leader and switches this Vault to
 // active.
 func (c *Core) waitForLeadership(newLeaderCh chan func(), manualStepDownCh, stopCh chan struct{}) {
+	fmt.Print("\n --- waitForLeadership --- \n")
 	var manualStepDown bool
 	firstIteration := true
 	for {
@@ -719,6 +725,23 @@ func (c *Core) waitForLeadership(newLeaderCh chan func(), manualStepDownCh, stop
 			c.stateLock.Unlock()
 		}
 	}
+}
+
+func (c *Core) promoteToPerfStandby(ctx context.Context) error {
+	if c.Sealed() {
+		return fmt.Errorf("stand-by still sealed")
+	}
+	dummyCancel := func() {}
+	if err := c.postUnseal(ctx, dummyCancel, readonlyUnsealStrategy{}); err != nil {
+		return err
+	}
+
+	// c.perfStandby = true
+
+	c.standby = false
+	metrics.SetGauge([]string{"core", "performance_standby"}, 1)
+	c.logger.Info("promoted to performance stand-by (local reads enabled)")
+	return nil
 }
 
 // grabLockOrStop returns stopped=false if the lock is acquired. Returns

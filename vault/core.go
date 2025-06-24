@@ -295,6 +295,8 @@ type Core struct {
 	keepHALockOnStepDown *uint32
 	heldHALock           physical.Lock
 
+	performanceStandby bool
+
 	// shutdownDoneCh is used to notify when core.Shutdown() completes.
 	// core.Shutdown() is typically issued in a goroutine to allow Vault to
 	// release the stateLock. This channel is marked atomic to prevent race
@@ -808,6 +810,7 @@ func (c *CoreConfig) GetServiceRegistration() sr.ServiceRegistration {
 // CreateCore conducts static validations on the Core Config
 // and returns an uninitialized core.
 func CreateCore(conf *CoreConfig) (*Core, error) {
+	fmt.Print("\n --- CreateCore --- \n")
 	if conf.HAPhysical != nil && conf.HAPhysical.HAEnabled() {
 		if conf.RedirectAddr == "" {
 			return nil, errors.New("missing API address, please set in configuration or via environment")
@@ -1046,6 +1049,7 @@ func CreateCore(conf *CoreConfig) (*Core, error) {
 
 // NewCore creates, initializes and configures a Vault node (core).
 func NewCore(conf *CoreConfig) (*Core, error) {
+	fmt.Print(("/n --- newCor --- \n"))
 	// NOTE: The order of configuration of the core has some importance, as we can
 	// make use of an early return if we are running this new core in recovery mode.
 	c, err := CreateCore(conf)
@@ -1056,6 +1060,15 @@ func NewCore(conf *CoreConfig) (*Core, error) {
 	err = coreInit(c, conf)
 	if err != nil {
 		return nil, err
+	}
+
+	standby, _ := c.Standby()
+	if !standby {
+		fmt.Print("\n --- NewCore be standby --- \n")
+	}
+	leader, _, _, _ := c.Leader()
+	if !leader {
+		fmt.Print("\n --- NewCore be Leader --- \n")
 	}
 
 	// Construct a new AES-GCM barrier
@@ -2349,6 +2362,99 @@ func (s standardUnsealStrategy) unseal(ctx context.Context, logger log.Logger, c
 	if err := c.handleVersionTimeStamps(ctx); err != nil {
 		return err
 	}
+
+	return nil
+}
+
+// readonlyUnsealStrategy is identical to standardUnsealStrategy
+// except that EVERY step that writes to raft is skipped.
+type readonlyUnsealStrategy struct{}
+
+func (readonlyUnsealStrategy) unseal(
+	ctx context.Context, logger log.Logger, c *Core,
+) error {
+	// 1. clear forwarders – safe (only touches memory)
+	c.requestForwardingConnectionLock.Lock()
+	c.clearForwardingClients()
+	c.requestForwardingConnectionLock.Unlock()
+	c.activeTime = time.Now().UTC()
+
+	// 2. physical init – SAFE (reads only)
+	if err := postUnsealPhysical(c); err != nil {
+		return err
+	}
+
+	// ***** 3. SKIP ***   c.persistFeatureFlags(ctx)
+	// ***** 4. SKIP ***   c.ensureWrappingKey(ctx)
+	// Those two append to the Raft log and must be skipped on a follower.
+	// Everything below is read-only and can stay.
+
+	// catalog / namespace store build only touch bolt locally
+	if err := c.setupPluginCatalog(ctx); err != nil {
+		return err
+	}
+	if err := c.setupNamespaceStore(ctx); err != nil {
+		return err
+	}
+
+	// These routines read the objects from storage and build the in-memory
+	// tables; they do **not** write, so are safe on a follower.
+	if err := c.loadMounts(ctx); err != nil {
+		return err
+	}
+	if err := c.setupMounts(ctx); err != nil {
+		return err
+	}
+	if err := c.setupPolicyStore(ctx); err != nil {
+		return err
+	}
+	if err := c.loadCORSConfig(ctx); err != nil {
+		return err
+	}
+	if err := c.loadCredentials(ctx); err != nil {
+		return err
+	}
+	if err := c.setupCredentials(ctx); err != nil {
+		return err
+	}
+	if err := c.setupQuotas(ctx); err != nil {
+		return err
+	}
+	if err := c.setupHeaderHMACKey(ctx); err != nil {
+		return err
+	}
+
+	// Safe background helpers
+	c.updateLockedUserEntries()
+	if err := c.startRollback(); err != nil {
+		return err
+	}
+	if err := c.setupExpiration(expireLeaseStrategyFairsharing); err != nil {
+		return err
+	}
+	if err := c.loadAudits(ctx); err != nil {
+		return err
+	}
+	if err := c.setupAudits(ctx); err != nil {
+		return err
+	}
+	if err := c.loadIdentityStoreArtifacts(ctx); err != nil {
+		return err
+	}
+	c.setupCachedMFAResponseAuth()
+	if err := c.loadLoginMFAConfigs(ctx); err != nil {
+		return err
+	}
+	if err := c.setupAuditedHeadersConfig(ctx); err != nil {
+		return err
+	}
+
+	// ***** 5. SKIP ***  setupRaftActiveNode / startForwarding
+	// Those start leader RPC listeners and must remain disabled.
+
+	// metrics goroutine is ok – it only reads counters
+	c.metricsCh = make(chan struct{})
+	go c.emitMetricsActiveNode(c.metricsCh)
 
 	return nil
 }

@@ -545,6 +545,8 @@ func (c *Core) HandleRequest(httpCtx context.Context, req *logical.Request) (res
 }
 
 func (c *Core) switchedLockHandleRequest(httpCtx context.Context, req *logical.Request, doLocking bool) (resp *logical.Response, err error) {
+	fmt.Printf("\n --- i am switchedLockHandleRequest --- \n")
+
 	if doLocking {
 		c.stateLock.RLock()
 		defer c.stateLock.RUnlock()
@@ -552,13 +554,26 @@ func (c *Core) switchedLockHandleRequest(httpCtx context.Context, req *logical.R
 	if c.Sealed() {
 		return nil, consts.ErrSealed
 	}
+	isLeader, _, _, _ := c.Leader()
+	if isLeader {
+		fmt.Printf("\n --- i am leader --- \n")
+	}
 	if c.standby {
-		return nil, consts.ErrStandby
+		fmt.Printf("\n --- i am standby --- \n")
+
+		if c.canProcessRequestLocally(req) {
+			fmt.Print("\n --- i canProcessRequestLocally --- \n")
+		} else {
+			// Performance standby can't handle request
+			return nil, consts.ErrStandby
+		}
 	}
 
 	if c.activeContext == nil || c.activeContext.Err() != nil {
 		return nil, errors.New("active context canceled after getting state lock")
 	}
+	fmt.Printf("\n --- i have active context --- \n")
+	fmt.Printf("\n -- time: %v -- \n", time.Now())
 
 	ctx, cancel := context.WithCancel(c.activeContext)
 	go func(ctx context.Context, httpCtx context.Context) {
@@ -615,7 +630,31 @@ func (c *Core) switchedLockHandleRequest(httpCtx context.Context, req *logical.R
 	resp, err = c.handleCancelableRequest(ctx, req)
 	req.SetTokenEntry(nil)
 	cancel()
+	fmt.Printf("\n --- resp: %v --- \n", resp)
 	return resp, err
+}
+
+// canProcessRequestLocally determines if a performance standby can handle the request locally
+func (c *Core) canProcessRequestLocally(req *logical.Request) bool {
+	// Performance standbys can handle read operations for most paths
+	fmt.Print("\n --- checking if can canProcessRequestLocally --- \n")
+	if req.Operation == logical.ReadOperation || req.Operation == logical.ListOperation {
+		// Allow reads to most paths except sensitive ones
+		switch {
+		case strings.HasPrefix(req.Path, "sys/"):
+			// Most sys/ paths should be forwarded to ensure consistency
+			return false
+		case strings.HasPrefix(req.Path, "auth/"):
+			// Auth paths can be read locally for better performance
+			return true
+		default:
+			// Other read operations can typically be handled locally
+			return true
+		}
+	}
+
+	// All write operations should be forwarded to the active node
+	return false
 }
 
 func (c *Core) handleCancelableRequest(ctx context.Context, req *logical.Request) (resp *logical.Response, err error) {
@@ -903,6 +942,7 @@ func (c *Core) isLoginRequest(ctx context.Context, req *logical.Request) bool {
 func (c *Core) handleRequest(ctx context.Context, req *logical.Request) (retResp *logical.Response, retAuth *logical.Auth, retErr error) {
 	defer metrics.MeasureSince([]string{"core", "handle_request"}, time.Now())
 
+	fmt.Print("\n --- I am invoked: handleRequest() - Perf standby? --- \n")
 	var nonHMACReqDataKeys []string
 	entry := c.router.MatchingMountEntry(ctx, req.Path)
 	if entry != nil {

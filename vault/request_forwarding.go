@@ -10,9 +10,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -318,9 +320,27 @@ func (c *Core) clearForwardingClients() {
 	c.clusterLeaderParams.Store((*ClusterLeaderParams)(nil))
 }
 
+func isReadOnlyHTTP(r *http.Request) bool {
+	// LIST is encoded as GET + ?list=true
+	if r.Method == http.MethodGet {
+		if strings.HasPrefix(r.URL.Path, "/v1/sys/") && // keep sys/ reads remote
+			!strings.HasPrefix(r.URL.Path, "/v1/sys/health") {
+			return false
+		}
+		return true
+	}
+	return false // all PUT/POST/DELETE remain writes
+}
+
 // ForwardRequest forwards a given request to the active node and returns the
 // response.
 func (c *Core) ForwardRequest(req *http.Request) (int, http.Header, []byte, error) {
+	fmt.Printf("\n --- ForwardRequest req: %v --- \n", req)
+
+	if c.standby && isReadOnlyHTTP(req) {
+		fmt.Printf("\n --- i am stnadby with read only: %v --- \n", req)
+	}
+
 	c.requestForwardingConnectionLock.RLock()
 	defer c.requestForwardingConnectionLock.RUnlock()
 

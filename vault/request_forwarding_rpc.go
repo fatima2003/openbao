@@ -5,6 +5,7 @@ package vault
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"runtime/debug"
@@ -26,6 +27,7 @@ type forwardedRequestRPCServer struct {
 }
 
 func (s *forwardedRequestRPCServer) ForwardRequest(ctx context.Context, freq *forwarding.Request) (*forwarding.Response, error) {
+	fmt.Printf("\n --- i am (forwardedRequestRPCServer)ForwardRequest --- \n")
 	// Parse an http.Request out of it
 	req, err := forwarding.ParseForwardedRequest(freq)
 	if err != nil {
