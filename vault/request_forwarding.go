@@ -338,7 +338,11 @@ func (c *Core) ForwardRequest(req *http.Request) (int, http.Header, []byte, erro
 	fmt.Printf("\n --- ForwardRequest req: %v --- \n", req)
 
 	if c.standby && isReadOnlyHTTP(req) {
-		fmt.Printf("\n --- i am stnadby with read only: %v --- \n", req)
+		fmt.Printf("\n --- i am standby with read only: %v --- \n", req)
+	}
+
+	if c.perfStandby && isReadOnlyHTTP(req) {
+		fmt.Printf("\n --- i am perfStandby with read only: %v --- \n", req)
 	}
 
 	c.requestForwardingConnectionLock.RLock()

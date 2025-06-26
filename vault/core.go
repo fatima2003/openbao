@@ -295,7 +295,7 @@ type Core struct {
 	keepHALockOnStepDown *uint32
 	heldHALock           physical.Lock
 
-	performanceStandby bool
+	perfStandby bool
 
 	// shutdownDoneCh is used to notify when core.Shutdown() completes.
 	// core.Shutdown() is typically issued in a goroutine to allow Vault to
@@ -810,7 +810,6 @@ func (c *CoreConfig) GetServiceRegistration() sr.ServiceRegistration {
 // CreateCore conducts static validations on the Core Config
 // and returns an uninitialized core.
 func CreateCore(conf *CoreConfig) (*Core, error) {
-	fmt.Print("\n --- CreateCore --- \n")
 	if conf.HAPhysical != nil && conf.HAPhysical.HAEnabled() {
 		if conf.RedirectAddr == "" {
 			return nil, errors.New("missing API address, please set in configuration or via environment")
@@ -1049,7 +1048,6 @@ func CreateCore(conf *CoreConfig) (*Core, error) {
 
 // NewCore creates, initializes and configures a Vault node (core).
 func NewCore(conf *CoreConfig) (*Core, error) {
-	fmt.Print(("/n --- newCor --- \n"))
 	// NOTE: The order of configuration of the core has some importance, as we can
 	// make use of an early return if we are running this new core in recovery mode.
 	c, err := CreateCore(conf)
@@ -1060,15 +1058,6 @@ func NewCore(conf *CoreConfig) (*Core, error) {
 	err = coreInit(c, conf)
 	if err != nil {
 		return nil, err
-	}
-
-	standby, _ := c.Standby()
-	if !standby {
-		fmt.Print("\n --- NewCore be standby --- \n")
-	}
-	leader, _, _, _ := c.Leader()
-	if !leader {
-		fmt.Print("\n --- NewCore be Leader --- \n")
 	}
 
 	// Construct a new AES-GCM barrier

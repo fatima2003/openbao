@@ -558,15 +558,19 @@ func (c *Core) switchedLockHandleRequest(httpCtx context.Context, req *logical.R
 	if isLeader {
 		fmt.Printf("\n --- i am leader --- \n")
 	}
-	if c.standby {
-		fmt.Printf("\n --- i am standby --- \n")
-
-		if c.canProcessRequestLocally(req) {
-			fmt.Print("\n --- i canProcessRequestLocally --- \n")
-		} else {
-			// Performance standby can't handle request
-			return nil, consts.ErrStandby
-		}
+	if c.perfStandby {
+		fmt.Printf("\n --- i am perfStandby --- \n")
+	}
+	if c.canProcessRequestLocally(req) {
+		fmt.Printf("\n --- i canProcessRequestLocally --- \n")
+	} else {
+		fmt.Printf("\n --- i CANNOT ProcessRequestLocally --- \n")
+	}
+	if c.standby || (c.perfStandby && !c.canProcessRequestLocally(req)) {
+		// Two conditions when request can't be handled:
+		// 1. Non-performance standby can't handle request.
+		// 2. Performance standby node with write request.
+		return nil, consts.ErrStandby
 	}
 
 	if c.activeContext == nil || c.activeContext.Err() != nil {

@@ -150,7 +150,7 @@ func (c *Core) LeaderLocked() (isLeader bool, leaderAddr, clusterAddr string, er
 	}
 
 	// Check if we are the leader
-	if !c.standby {
+	if !c.standby || !c.perfStandby {
 		return true, c.redirectAddr, c.ClusterAddr(), nil
 	}
 
@@ -640,6 +640,7 @@ func (c *Core) waitForLeadership(newLeaderCh chan func(), manualStepDownCh, stop
 		err = c.postUnseal(activeCtx, activeCtxCancel, standardUnsealStrategy{})
 		if err == nil {
 			c.standby = false
+			c.perfStandby = false
 			c.leaderUUID = uuid
 			c.metricSink.SetGaugeWithLabels([]string{"core", "active"}, 1, nil)
 		}
@@ -736,9 +737,13 @@ func (c *Core) promoteToPerfStandby(ctx context.Context) error {
 		return err
 	}
 
-	// c.perfStandby = true
-
+	c.perfStandby = true
 	c.standby = false
+
+	isLeader, _, _, _ := c.Leader()
+	if isLeader {
+		fmt.Printf("\n --- i am leader in promoteToPerfStandby --- \n")
+	}
 	metrics.SetGauge([]string{"core", "performance_standby"}, 1)
 	c.logger.Info("promoted to performance stand-by (local reads enabled)")
 	return nil
