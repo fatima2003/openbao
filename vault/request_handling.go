@@ -623,6 +623,11 @@ func (c *Core) switchedLockHandleRequest(httpCtx context.Context, req *logical.R
 
 // canProcessRequestLocally determines if a performance standby can handle the request locally
 func (c *Core) canProcessRequestLocally(req *logical.Request) bool {
+	if req.Operation != logical.ReadOperation && req.Operation != logical.ListOperation {
+		// All write operations should be forwarded to the active node
+		return false
+	}
+
 	// Performance standbys can handle read operations for most paths
 	if req.Operation == logical.ReadOperation || req.Operation == logical.ListOperation {
 		// Allow reads to most paths except sensitive ones

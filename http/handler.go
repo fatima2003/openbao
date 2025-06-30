@@ -767,17 +767,6 @@ func parseFormRequest(r *http.Request) (map[string]interface{}, error) {
 	return data, nil
 }
 
-func isReadOnlyHTTP(r *http.Request) bool {
-	if r.Method == http.MethodGet {
-		if strings.HasPrefix(r.URL.Path, "/v1/sys/") &&
-			!strings.HasPrefix(r.URL.Path, "/v1/sys/health") {
-			return false
-		}
-		return true
-	}
-	return false
-}
-
 // handleRequestForwarding determines whether to forward a request or not,
 // falling back on the older behavior of redirecting the client
 func handleRequestForwarding(core *vault.Core, handler http.Handler) http.Handler {
@@ -786,8 +775,6 @@ func handleRequestForwarding(core *vault.Core, handler http.Handler) http.Handle
 		// the leader are set up, as that happens once the advertised cluster
 		// values are read during this function
 		isLeader, leaderAddr, _, err := core.Leader()
-		isPerfStandby, _ := core.PerfStandby()
-
 		if err != nil {
 			if err == vault.ErrHANotEnabled {
 				// Standalone node, serve request normally
@@ -798,7 +785,14 @@ func handleRequestForwarding(core *vault.Core, handler http.Handler) http.Handle
 			respondError(w, http.StatusInternalServerError, err)
 			return
 		}
-		if isReadOnlyHTTP(r) && isPerfStandby {
+
+		isPerfStandby, err := core.PerfStandby()
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, err)
+			return
+		}
+
+		if IsReadOnlyHTTP(r) && isPerfStandby {
 			// No forwarding needed, we're read-only in performance standby
 			handler.ServeHTTP(w, r)
 			return
