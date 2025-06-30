@@ -2243,21 +2243,19 @@ type UnsealStrategy interface {
 	unseal(context.Context, log.Logger, *Core) error
 }
 
-type standardUnsealStrategy struct{}
+type standardUnsealStrategy struct {
+	// Inherit read-only unseal methods
+	readonlyUnsealStrategy
+}
 
 func (s standardUnsealStrategy) unseal(ctx context.Context, logger log.Logger, c *Core) error {
-	// Clear forwarding clients; we're active
-	c.requestForwardingConnectionLock.Lock()
-	c.clearForwardingClients()
-	c.requestForwardingConnectionLock.Unlock()
+	if err := s.readonlyUnsealStrategy.unseal(ctx, logger, c); err != nil {
+		return err
+	}
 
 	// Mark the active time. We do this first so it can be correlated to the logs
 	// for the active startup.
 	c.activeTime = time.Now().UTC()
-
-	if err := postUnsealPhysical(c); err != nil {
-		return err
-	}
 
 	// Only perf primarys should write feature flags, but we do it by
 	// excluding other states so that we don't have to change it when
@@ -2266,6 +2264,7 @@ func (s standardUnsealStrategy) unseal(ctx context.Context, logger log.Logger, c
 		return err
 	}
 
+	// auto-rotate barrier key
 	if c.autoRotateCancel == nil {
 		var autoRotateCtx context.Context
 		autoRotateCtx, c.autoRotateCancel = context.WithCancel(c.activeContext)
@@ -2273,62 +2272,6 @@ func (s standardUnsealStrategy) unseal(ctx context.Context, logger log.Logger, c
 	}
 
 	if err := c.ensureWrappingKey(ctx); err != nil {
-		return err
-	}
-	if err := c.setupPluginCatalog(ctx); err != nil {
-		return err
-	}
-	if err := c.setupNamespaceStore(ctx); err != nil {
-		return err
-	}
-	if err := c.loadMounts(ctx); err != nil {
-		return err
-	}
-	if err := c.setupMounts(ctx); err != nil {
-		return err
-	}
-	if err := c.setupPolicyStore(ctx); err != nil {
-		return err
-	}
-	if err := c.loadCORSConfig(ctx); err != nil {
-		return err
-	}
-	if err := c.loadCredentials(ctx); err != nil {
-		return err
-	}
-	if err := c.setupCredentials(ctx); err != nil {
-		return err
-	}
-	if err := c.setupQuotas(ctx); err != nil {
-		return err
-	}
-	if err := c.setupHeaderHMACKey(ctx); err != nil {
-		return err
-	}
-
-	c.updateLockedUserEntries()
-
-	if err := c.startRollback(); err != nil {
-		return err
-	}
-	if err := c.setupExpiration(expireLeaseStrategyFairsharing); err != nil {
-		return err
-	}
-	if err := c.loadAudits(ctx); err != nil {
-		return err
-	}
-	if err := c.setupAudits(ctx); err != nil {
-		return err
-	}
-	if err := c.loadIdentityStoreArtifacts(ctx); err != nil {
-		return err
-	}
-	c.setupCachedMFAResponseAuth()
-	if err := c.loadLoginMFAConfigs(ctx); err != nil {
-		return err
-	}
-
-	if err := c.setupAuditedHeadersConfig(ctx); err != nil {
 		return err
 	}
 
@@ -2346,9 +2289,6 @@ func (s standardUnsealStrategy) unseal(ctx context.Context, logger log.Logger, c
 	c.clusterParamsLock.Lock()
 	defer c.clusterParamsLock.Unlock()
 
-	c.metricsCh = make(chan struct{})
-	go c.emitMetricsActiveNode(c.metricsCh)
-
 	// Establish version timestamps at the end of unseal on active nodes only.
 	if err := c.handleVersionTimeStamps(ctx); err != nil {
 		return err
@@ -2357,39 +2297,27 @@ func (s standardUnsealStrategy) unseal(ctx context.Context, logger log.Logger, c
 	return nil
 }
 
-// readonlyUnsealStrategy is identical to standardUnsealStrategy
-// except that EVERY step that writes to raft is skipped.
+// readonlyUnsealStrategy
 type readonlyUnsealStrategy struct{}
 
 func (readonlyUnsealStrategy) unseal(
 	ctx context.Context, logger log.Logger, c *Core,
 ) error {
-	// 1. clear forwarders – safe (only touches memory)
+	// Clear forwarding clients; we're active
 	c.requestForwardingConnectionLock.Lock()
 	c.clearForwardingClients()
 	c.requestForwardingConnectionLock.Unlock()
 	c.activeTime = time.Now().UTC()
 
-	// 2. physical init – SAFE (reads only)
 	if err := postUnsealPhysical(c); err != nil {
 		return err
 	}
-
-	// ***** 3. SKIP ***   c.persistFeatureFlags(ctx)
-	// ***** 4. SKIP ***   c.ensureWrappingKey(ctx)
-	// Those two append to the Raft log and must be skipped on a follower.
-	// Everything below is read-only and can stay.
-
-	// catalog / namespace store build only touch bolt locally
 	if err := c.setupPluginCatalog(ctx); err != nil {
 		return err
 	}
 	if err := c.setupNamespaceStore(ctx); err != nil {
 		return err
 	}
-
-	// These routines read the objects from storage and build the in-memory
-	// tables; they do **not** write, so are safe on a follower.
 	if err := c.loadMounts(ctx); err != nil {
 		return err
 	}
@@ -2415,8 +2343,8 @@ func (readonlyUnsealStrategy) unseal(
 		return err
 	}
 
-	// Safe background helpers
 	c.updateLockedUserEntries()
+
 	if err := c.startRollback(); err != nil {
 		return err
 	}
@@ -2440,10 +2368,6 @@ func (readonlyUnsealStrategy) unseal(
 		return err
 	}
 
-	// ***** 5. SKIP ***  setupRaftActiveNode / startForwarding
-	// Those start leader RPC listeners and must remain disabled.
-
-	// metrics goroutine is ok – it only reads counters
 	c.metricsCh = make(chan struct{})
 	go c.emitMetricsActiveNode(c.metricsCh)
 
