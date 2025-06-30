@@ -59,6 +59,14 @@ func (c *Core) Standby() (bool, error) {
 	return standby, nil
 }
 
+// PerfStandby checks if the Vault is in performance standby mode
+func (c *Core) PerfStandby() (bool, error) {
+	c.stateLock.RLock()
+	perfStandby := c.perfStandby
+	c.stateLock.RUnlock()
+	return perfStandby, nil
+}
+
 func (c *Core) ActiveTime() time.Time {
 	c.stateLock.RLock()
 	activeTime := c.activeTime
@@ -68,9 +76,10 @@ func (c *Core) ActiveTime() time.Time {
 
 // StandbyStates is meant as a way to avoid some extra locking on the very
 // common sys/health check.
-func (c *Core) StandbyStates() (standby bool) {
+func (c *Core) StandbyStates() (standby bool, perfStandby bool) {
 	c.stateLock.RLock()
 	standby = c.standby
+	perfStandby = c.perfStandby
 	c.stateLock.RUnlock()
 	return
 }
@@ -150,7 +159,7 @@ func (c *Core) LeaderLocked() (isLeader bool, leaderAddr, clusterAddr string, er
 	}
 
 	// Check if we are the leader
-	if !c.standby || !c.perfStandby {
+	if !c.standby && !c.perfStandby {
 		return true, c.redirectAddr, c.ClusterAddr(), nil
 	}
 
@@ -278,7 +287,7 @@ func (c *Core) StepDown(httpCtx context.Context, req *logical.Request) (retErr e
 	if c.Sealed() {
 		return nil
 	}
-	if c.ha == nil || c.standby {
+	if c.ha == nil || c.standby || c.perfStandby { // No-op if already some form of standby
 		return nil
 	}
 
@@ -466,7 +475,6 @@ func (c *Core) runStandby(doneCh, manualStepDownCh, stopCh chan struct{}) {
 // is enabled. It waits until we are leader and switches this Vault to
 // active.
 func (c *Core) waitForLeadership(newLeaderCh chan func(), manualStepDownCh, stopCh chan struct{}) {
-	fmt.Print("\n --- waitForLeadership --- \n")
 	var manualStepDown bool
 	firstIteration := true
 	for {
@@ -740,10 +748,6 @@ func (c *Core) promoteToPerfStandby(ctx context.Context) error {
 	c.perfStandby = true
 	c.standby = false
 
-	isLeader, _, _, _ := c.Leader()
-	if isLeader {
-		fmt.Printf("\n --- i am leader in promoteToPerfStandby --- \n")
-	}
 	metrics.SetGauge([]string{"core", "performance_standby"}, 1)
 	c.logger.Info("promoted to performance stand-by (local reads enabled)")
 	return nil

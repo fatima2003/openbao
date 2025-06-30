@@ -545,26 +545,12 @@ func (c *Core) HandleRequest(httpCtx context.Context, req *logical.Request) (res
 }
 
 func (c *Core) switchedLockHandleRequest(httpCtx context.Context, req *logical.Request, doLocking bool) (resp *logical.Response, err error) {
-	fmt.Printf("\n --- i am switchedLockHandleRequest --- \n")
-
 	if doLocking {
 		c.stateLock.RLock()
 		defer c.stateLock.RUnlock()
 	}
 	if c.Sealed() {
 		return nil, consts.ErrSealed
-	}
-	isLeader, _, _, _ := c.Leader()
-	if isLeader {
-		fmt.Printf("\n --- i am leader --- \n")
-	}
-	if c.perfStandby {
-		fmt.Printf("\n --- i am perfStandby --- \n")
-	}
-	if c.canProcessRequestLocally(req) {
-		fmt.Printf("\n --- i canProcessRequestLocally --- \n")
-	} else {
-		fmt.Printf("\n --- i CANNOT ProcessRequestLocally --- \n")
 	}
 	if c.standby || (c.perfStandby && !c.canProcessRequestLocally(req)) {
 		// Two conditions when request can't be handled:
@@ -576,8 +562,6 @@ func (c *Core) switchedLockHandleRequest(httpCtx context.Context, req *logical.R
 	if c.activeContext == nil || c.activeContext.Err() != nil {
 		return nil, errors.New("active context canceled after getting state lock")
 	}
-	fmt.Printf("\n --- i have active context --- \n")
-	fmt.Printf("\n -- time: %v -- \n", time.Now())
 
 	ctx, cancel := context.WithCancel(c.activeContext)
 	go func(ctx context.Context, httpCtx context.Context) {
@@ -634,14 +618,12 @@ func (c *Core) switchedLockHandleRequest(httpCtx context.Context, req *logical.R
 	resp, err = c.handleCancelableRequest(ctx, req)
 	req.SetTokenEntry(nil)
 	cancel()
-	fmt.Printf("\n --- resp: %v --- \n", resp)
 	return resp, err
 }
 
 // canProcessRequestLocally determines if a performance standby can handle the request locally
 func (c *Core) canProcessRequestLocally(req *logical.Request) bool {
 	// Performance standbys can handle read operations for most paths
-	fmt.Print("\n --- checking if can canProcessRequestLocally --- \n")
 	if req.Operation == logical.ReadOperation || req.Operation == logical.ListOperation {
 		// Allow reads to most paths except sensitive ones
 		switch {
@@ -946,7 +928,6 @@ func (c *Core) isLoginRequest(ctx context.Context, req *logical.Request) bool {
 func (c *Core) handleRequest(ctx context.Context, req *logical.Request) (retResp *logical.Response, retAuth *logical.Auth, retErr error) {
 	defer metrics.MeasureSince([]string{"core", "handle_request"}, time.Now())
 
-	fmt.Print("\n --- I am invoked: handleRequest() - Perf standby? --- \n")
 	var nonHMACReqDataKeys []string
 	entry := c.router.MatchingMountEntry(ctx, req.Path)
 	if entry != nil {

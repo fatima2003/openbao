@@ -645,6 +645,8 @@ type Core struct {
 // c.stateLock needs to be held in read mode before calling this function.
 func (c *Core) HAState() consts.HAState {
 	switch {
+	case c.perfStandby:
+		return consts.PerfStandby
 	case c.standby:
 		return consts.Standby
 	default:
