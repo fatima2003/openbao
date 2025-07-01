@@ -60,11 +60,11 @@ func (c *Core) Standby() (bool, error) {
 }
 
 // PerfStandby checks if the Vault is in performance standby mode
-func (c *Core) PerfStandby() (bool, error) {
+func (c *Core) PerfStandby() bool {
 	c.stateLock.RLock()
 	perfStandby := c.perfStandby
 	c.stateLock.RUnlock()
-	return perfStandby, nil
+	return perfStandby
 }
 
 func (c *Core) ActiveTime() time.Time {
@@ -745,8 +745,10 @@ func (c *Core) promoteToPerfStandby(ctx context.Context) error {
 		return err
 	}
 
+	c.stateLock.Lock()
 	c.perfStandby = true
 	c.standby = false
+	c.stateLock.Unlock()
 
 	metrics.SetGauge([]string{"core", "performance_standby"}, 1)
 	c.logger.Info("promoted to performance stand-by (local reads enabled)")
