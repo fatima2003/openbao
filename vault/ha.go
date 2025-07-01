@@ -59,6 +59,14 @@ func (c *Core) Standby() (bool, error) {
 	return standby, nil
 }
 
+// PerfStandby checks if the Vault is in performance standby mode
+func (c *Core) PerfStandby() bool {
+	c.stateLock.RLock()
+	perfStandby := c.perfStandby
+	c.stateLock.RUnlock()
+	return perfStandby
+}
+
 func (c *Core) ActiveTime() time.Time {
 	c.stateLock.RLock()
 	activeTime := c.activeTime
@@ -68,9 +76,10 @@ func (c *Core) ActiveTime() time.Time {
 
 // StandbyStates is meant as a way to avoid some extra locking on the very
 // common sys/health check.
-func (c *Core) StandbyStates() (standby bool) {
+func (c *Core) StandbyStates() (standby bool, perfStandby bool) {
 	c.stateLock.RLock()
 	standby = c.standby
+	perfStandby = c.perfStandby
 	c.stateLock.RUnlock()
 	return
 }
@@ -150,7 +159,7 @@ func (c *Core) LeaderLocked() (isLeader bool, leaderAddr, clusterAddr string, er
 	}
 
 	// Check if we are the leader
-	if !c.standby {
+	if !c.standby && !c.perfStandby {
 		return true, c.redirectAddr, c.ClusterAddr(), nil
 	}
 
@@ -278,7 +287,7 @@ func (c *Core) StepDown(httpCtx context.Context, req *logical.Request) (retErr e
 	if c.Sealed() {
 		return nil
 	}
-	if c.ha == nil || c.standby {
+	if c.ha == nil || c.standby || c.perfStandby { // No-op if already some form of standby
 		return nil
 	}
 
@@ -394,6 +403,11 @@ func (c *Core) runStandby(doneCh, manualStepDownCh, stopCh chan struct{}) {
 	defer close(doneCh)
 	defer close(manualStepDownCh)
 	c.logger.Info("entering standby mode")
+
+	// !disable perf standby:
+	if err := c.promoteToPerfStandby(namespace.RootContext(nil)); err != nil {
+		c.logger.Error("failed to promote to performance standby", "error", err)
+	}
 
 	var g run.Group
 	newLeaderCh := addEnterpriseHaActors(c, &g)
@@ -634,6 +648,7 @@ func (c *Core) waitForLeadership(newLeaderCh chan func(), manualStepDownCh, stop
 		err = c.postUnseal(activeCtx, activeCtxCancel, standardUnsealStrategy{})
 		if err == nil {
 			c.standby = false
+			c.perfStandby = false
 			c.leaderUUID = uuid
 			c.metricSink.SetGaugeWithLabels([]string{"core", "active"}, 1, nil)
 		}
@@ -719,6 +734,25 @@ func (c *Core) waitForLeadership(newLeaderCh chan func(), manualStepDownCh, stop
 			c.stateLock.Unlock()
 		}
 	}
+}
+
+func (c *Core) promoteToPerfStandby(ctx context.Context) error {
+	if c.Sealed() {
+		return fmt.Errorf("stand-by still sealed")
+	}
+	dummyCancel := func() {}
+	if err := c.postUnseal(ctx, dummyCancel, readonlyUnsealStrategy{}); err != nil {
+		return err
+	}
+
+	c.stateLock.Lock()
+	c.perfStandby = true
+	c.standby = false
+	c.stateLock.Unlock()
+
+	metrics.SetGauge([]string{"core", "performance_standby"}, 1)
+	c.logger.Info("promoted to performance stand-by (local reads enabled)")
+	return nil
 }
 
 // grabLockOrStop returns stopped=false if the lock is acquired. Returns

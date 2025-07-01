@@ -785,6 +785,14 @@ func handleRequestForwarding(core *vault.Core, handler http.Handler) http.Handle
 			respondError(w, http.StatusInternalServerError, err)
 			return
 		}
+
+		isPerfStandby := core.PerfStandby()
+
+		if IsReadOnlyHTTP(r) && isPerfStandby {
+			// No forwarding needed, we're read-only in performance standby
+			handler.ServeHTTP(w, r)
+			return
+		}
 		if isLeader {
 			// No forwarding needed, we're leader
 			handler.ServeHTTP(w, r)
