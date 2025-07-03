@@ -2249,13 +2249,13 @@ type standardUnsealStrategy struct {
 }
 
 func (s standardUnsealStrategy) unseal(ctx context.Context, logger log.Logger, c *Core) error {
-	if err := s.readonlyUnsealStrategy.unseal(ctx, logger, c); err != nil {
-		return err
-	}
-
 	// Mark the active time. We do this first so it can be correlated to the logs
 	// for the active startup.
 	c.activeTime = time.Now().UTC()
+
+	if err := s.readonlyUnsealStrategy.unseal(ctx, logger, c); err != nil {
+		return err
+	}
 
 	// Only perf primarys should write feature flags, but we do it by
 	// excluding other states so that we don't have to change it when

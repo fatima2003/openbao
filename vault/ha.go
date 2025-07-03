@@ -698,8 +698,9 @@ func (c *Core) waitForLeadership(newLeaderCh chan func(), manualStepDownCh, stop
 			activeCtxCancel()
 			metrics.MeasureSince([]string{"core", "leadership_lost"}, activeTime)
 
-			// Mark as standby
-			c.standby = true
+			// Mark as perf standby
+			c.standby = false
+			c.perfStandby = true
 			c.leaderUUID = ""
 			c.metricSink.SetGaugeWithLabels([]string{"core", "active"}, 0, nil)
 
@@ -720,10 +721,10 @@ func (c *Core) waitForLeadership(newLeaderCh chan func(), manualStepDownCh, stop
 				c.heldHALock = nil
 			}
 
-			// Advertise ourselves as a standby.
+			// Advertise ourselves as a perf standby.
 			if c.serviceRegistration != nil {
 				if err := c.serviceRegistration.NotifyActiveStateChange(false); err != nil {
-					c.logger.Warn("failed to notify standby status", "error", err)
+					c.logger.Warn("failed to notify perf standby status", "error", err)
 				}
 			}
 
