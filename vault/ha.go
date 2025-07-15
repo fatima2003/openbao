@@ -399,7 +399,7 @@ func (c *Core) runStandby(doneCh, manualStepDownCh, stopCh chan struct{}) {
 	if err := c.postUnseal(perfCtx, perfCancel, readonlyUnsealStrategy{}); err != nil {
 		c.logger.Error("read-only post-unseal setup failed", "error", err)
 		c.barrier.Seal()
-		c.logger.Warn("vault is sealed")		
+		c.logger.Warn("vault is sealed")
 	}
 
 	var g run.Group
