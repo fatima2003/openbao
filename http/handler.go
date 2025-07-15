@@ -790,6 +790,11 @@ func handleRequestForwarding(core *vault.Core, handler http.Handler) http.Handle
 			respondError(w, http.StatusInternalServerError, err)
 			return
 		}
+		if IsReadOnlyHTTP(r) {
+			// No forwarding needed, all nodes can serve read requests
+			handler.ServeHTTP(w, r)
+			return
+		}
 		if isLeader {
 			// No forwarding needed, we're leader
 			handler.ServeHTTP(w, r)
