@@ -561,7 +561,7 @@ func (c *Core) switchedLockHandleRequest(httpCtx context.Context, req *logical.R
 	if c.Sealed() {
 		return nil, consts.ErrSealed
 	}
-	if c.standby {
+	if c.standby && !c.canProcessRequestLocally(req) {
 		return nil, consts.ErrStandby
 	}
 
@@ -629,6 +629,33 @@ func (c *Core) switchedLockHandleRequest(httpCtx context.Context, req *logical.R
 	req.SetTokenEntry(nil)
 	cancel()
 	return resp, err
+}
+
+// canProcessRequestLocally determines if a performance standby can handle the request locally
+func (c *Core) canProcessRequestLocally(req *logical.Request) bool {
+	if req.Operation != logical.ReadOperation && req.Operation != logical.ListOperation {
+		// All write operations should be forwarded to the active node
+		return false
+	}
+
+	// Performance standbys can handle read operations for most paths
+	if req.Operation == logical.ReadOperation || req.Operation == logical.ListOperation {
+		// Allow reads to most paths except sensitive ones
+		switch {
+		case strings.HasPrefix(req.Path, "sys/"):
+			// Most sys/ paths should be forwarded to ensure consistency
+			return false
+		case strings.HasPrefix(req.Path, "auth/"):
+			// Auth paths can be read locally for better performance
+			return true
+		default:
+			// Other read operations can typically be handled locally
+			return true
+		}
+	}
+
+	// All write operations should be forwarded to the active node
+	return false
 }
 
 func (c *Core) handleInlineAuth(ctx context.Context, req *logical.Request, nsHeader string) error {

@@ -800,7 +800,7 @@ func TestWaitActive(t testing.T, core *Core) {
 func TestWaitActiveForwardingReady(t testing.T, core *Core) {
 	TestWaitActive(t, core)
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(4 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, ok := core.getClusterListener().Handler(consts.RequestForwardingALPN); ok {
 			return

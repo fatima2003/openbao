@@ -197,3 +197,13 @@ func (m *multiReaderCloser) Close() error {
 	}
 	return err
 }
+
+func IsReadOnlyHTTP(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	if strings.HasPrefix(r.URL.Path, "/v1/sys/") && !strings.HasPrefix(r.URL.Path, "/v1/sys/health") {
+		return false
+	}
+	return true
+}
