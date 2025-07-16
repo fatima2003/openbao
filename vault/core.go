@@ -2276,6 +2276,10 @@ func (s standardUnsealStrategy) unseal(ctx context.Context, logger log.Logger, c
 		return err
 	}
 
+	if err := s.readonlyUnsealStrategy.unseal(ctx, logger, c); err != nil {
+		return err
+	}
+
 	if c.getClusterListener() != nil {
 		if err := c.setupRaftActiveNode(ctx); err != nil {
 			return err
@@ -2331,7 +2335,6 @@ func (readonlyUnsealStrategy) unseal(
 		return err
 	}
 	if err := c.setupCredentials(ctx); err != nil {
-		fmt.Print("\n ~~~ setupCredentials")
 		return err
 	}
 	if err := c.setupQuotas(ctx); err != nil {
