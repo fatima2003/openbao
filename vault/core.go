@@ -1900,14 +1900,6 @@ func (c *Core) unsealInternal(ctx context.Context, rootKey []byte) error {
 			return err
 		}
 
-		perfCtx, perfCancel := context.WithCancel(namespace.RootContext(nil))
-		if err := c.postUnseal(perfCtx, perfCancel, readonlyUnsealStrategy{}); err != nil {
-			c.logger.Error("read-only post-unseal setup failed", "error", err)
-			c.barrier.Seal()
-			c.logger.Warn("vault is sealed")
-			return err
-		}
-
 		// Force a cache bust here, which will also run migration code
 		if c.seal.RecoveryKeySupported() {
 			c.seal.SetRecoveryConfig(ctx, nil)
@@ -2281,6 +2273,10 @@ func (s standardUnsealStrategy) unseal(ctx context.Context, logger log.Logger, c
 	}
 
 	if err := c.ensureWrappingKey(ctx); err != nil {
+		return err
+	}
+
+	if err := s.readonlyUnsealStrategy.unseal(ctx, logger, c); err != nil {
 		return err
 	}
 

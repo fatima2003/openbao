@@ -344,14 +344,6 @@ func (c *Core) Initialize(ctx context.Context, initParams *InitParams) (*InitRes
 		return nil, err
 	}
 
-	perfCtx, perfCancel := context.WithCancel(namespace.RootContext(nil))
-	if err := c.postUnseal(perfCtx, perfCancel, readonlyUnsealStrategy{}); err != nil {
-		c.logger.Error("read-only post-unseal setup failed", "error", err)
-		c.barrier.Seal()
-		c.logger.Warn("vault is sealed")
-		return nil, err
-	}
-
 	// Save the configuration regardless, but only generate a key if it's not
 	// disabled. When using recovery keys they are stored in the barrier, so
 	// this must happen post-unseal.
