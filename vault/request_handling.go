@@ -557,15 +557,13 @@ func (c *Core) HandleRequest(httpCtx context.Context, req *logical.Request) (res
 }
 
 func (c *Core) switchedLockHandleRequest(httpCtx context.Context, req *logical.Request, doLocking bool) (resp *logical.Response, err error) {
+	c.logger.Debug("switchedLockHandleRequest req", req)
 	if doLocking {
 		c.stateLock.RLock()
 		defer c.stateLock.RUnlock()
 	}
 	if c.Sealed() {
 		return nil, consts.ErrSealed
-	}
-	if c.standby {
-		return nil, consts.ErrStandby
 	}
 
 	if c.activeContext == nil || c.activeContext.Err() != nil {

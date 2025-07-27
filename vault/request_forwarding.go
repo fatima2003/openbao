@@ -321,6 +321,7 @@ func (c *Core) clearForwardingClients() {
 // ForwardRequest forwards a given request to the active node and returns the
 // response.
 func (c *Core) ForwardRequest(req *http.Request) (int, http.Header, []byte, error) {
+	c.logger.Info("i am ForwardRequest")
 	c.requestForwardingConnectionLock.RLock()
 	defer c.requestForwardingConnectionLock.RUnlock()
 
