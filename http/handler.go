@@ -731,12 +731,14 @@ func parseQuery(values url.Values) map[string]interface{} {
 }
 
 func parseJSONRequest(r *http.Request, w http.ResponseWriter, out interface{}) (io.ReadCloser, error) {
-	// Limit the maximum number of bytes to MaxRequestSize to protect
-	// against an indefinite amount of data being read.
-	reader := r.Body
+	origBody := new(bytes.Buffer)
+	reader := io.NopCloser(io.TeeReader(r.Body, origBody))
 	err := jsonutil.DecodeJSONFromReader(reader, out)
 	if err != nil && err != io.EOF {
 		return nil, fmt.Errorf("failed to parse JSON input: %w", err)
+	}
+	if err == nil {
+		r.Body = io.NopCloser(origBody)
 	}
 	return nil, err
 }
@@ -773,37 +775,10 @@ func parseFormRequest(r *http.Request) (map[string]interface{}, error) {
 // falling back on the older behavior of redirecting the client
 func handleRequestForwarding(core *vault.Core, handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if IsReadOnlyHTTP(r) {
-			// No forwarding needed, we're handling read request
-			handler.ServeHTTP(w, r)
-			return
-		}
-
 		// Note: in an HA setup, this call will also ensure that connections to
 		// the leader are set up, as that happens once the advertised cluster
 		// values are read during this function
-		isLeader, leaderAddr, _, err := core.Leader()
-		if err != nil {
-			if err == vault.ErrHANotEnabled {
-				// Standalone node, serve request normally
-				handler.ServeHTTP(w, r)
-				return
-			}
-			// Some internal error occurred
-			respondError(w, http.StatusInternalServerError, err)
-			return
-		}
-		if isLeader {
-			// No forwarding needed, we're leader
-			handler.ServeHTTP(w, r)
-			return
-		}
-		if leaderAddr == "" {
-			respondError(w, http.StatusInternalServerError, errors.New("local node not active but active cluster node not found"))
-			return
-		}
-
-		forwardRequest(core, w, r)
+		handler.ServeHTTP(w, r)
 	})
 }
 
@@ -877,6 +852,13 @@ func forwardRequest(core *vault.Core, w http.ResponseWriter, r *http.Request) {
 // case of an error.
 func request(core *vault.Core, w http.ResponseWriter, rawReq *http.Request, r *logical.Request) (*logical.Response, bool, bool) {
 	resp, err := core.HandleRequest(rawReq.Context(), r)
+	fmt.Printf("\n HandleRequest: \n resp: %v \n, err: %v \n", resp, err)
+
+	if errwrap.Contains(err, "node is not the leader") {
+		core.Logger().Debug("got issues handling request because we're a standby, forwarding", "error", err)
+		return resp, false, true
+	}
+
 	if errwrap.Contains(err, consts.ErrStandby.Error()) {
 		core.Logger().Debug("got issues handling request because we're a standby, forwarding", "error", err)
 		return resp, false, true
