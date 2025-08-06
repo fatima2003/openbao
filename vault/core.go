@@ -68,6 +68,10 @@ const (
 	// for a highly-available deploy.
 	CoreLockPath = "core/lock"
 
+	// CoreInitLockPath is the path used to acquire a coordinating lock
+	// for a highly-available deployment which is undergoing initialization.
+	CoreInitLockPath = "core/initialize-lock"
+
 	// The poison pill is used as a check during certain scenarios to indicate
 	// to standby nodes that they should seal
 	poisonPillPath = "core/poison-pill"
@@ -117,6 +121,10 @@ var (
 	// ErrAlreadyInit is returned if the core is already
 	// initialized. This prevents a re-initialization.
 	ErrAlreadyInit = errors.New("Vault is already initialized")
+
+	// ErrParallelInit is returned if the core is undergoing
+	// initialization on another node. This prevents a re-initialization.
+	ErrParallelInit = errors.New("Vault is being initialized on another node")
 
 	// ErrNotInit is returned if a non-initialized barrier
 	// is attempted to be unsealed.
@@ -2251,9 +2259,14 @@ type UnsealStrategy interface {
 	unseal(context.Context, log.Logger, *Core) error
 }
 
-type standardUnsealStrategy struct{}
+type standardUnsealStrategy struct {
+	// Inherit read-only unseal methods
+	readonlyUnsealStrategy
+}
 
 func (s standardUnsealStrategy) unseal(ctx context.Context, logger log.Logger, c *Core) error {
+	c.logger.Debug("standard unseal starting")
+
 	// Clear forwarding clients; we're active
 	c.requestForwardingConnectionLock.Lock()
 	c.clearForwardingClients()
@@ -2263,17 +2276,6 @@ func (s standardUnsealStrategy) unseal(ctx context.Context, logger log.Logger, c
 	// for the active startup.
 	c.activeTime = time.Now().UTC()
 
-	if err := postUnsealPhysical(c); err != nil {
-		return err
-	}
-
-	// Only perf primarys should write feature flags, but we do it by
-	// excluding other states so that we don't have to change it when
-	// a non-replicated cluster becomes a primary.
-	if err := c.persistFeatureFlags(ctx); err != nil {
-		return err
-	}
-
 	if c.autoRotateCancel == nil {
 		var autoRotateCtx context.Context
 		autoRotateCtx, c.autoRotateCancel = context.WithCancel(c.activeContext)
@@ -2281,6 +2283,46 @@ func (s standardUnsealStrategy) unseal(ctx context.Context, logger log.Logger, c
 	}
 
 	if err := c.ensureWrappingKey(ctx); err != nil {
+		return err
+	}
+
+	if err := s.readonlyUnsealStrategy.unseal(ctx, logger, c); err != nil {
+		return err
+	}
+
+	if c.getClusterListener() != nil {
+		if err := c.setupRaftActiveNode(ctx); err != nil {
+			return err
+		}
+		if err := c.startForwarding(ctx); err != nil {
+			return err
+		}
+
+	}
+
+	c.clusterParamsLock.Lock()
+	defer c.clusterParamsLock.Unlock()
+
+	c.metricsCh = make(chan struct{})
+	go c.emitMetricsActiveNode(c.metricsCh)
+
+	// Establish version timestamps at the end of unseal on active nodes only.
+	if err := c.handleVersionTimeStamps(ctx); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// readonlyUnsealStrategy
+type readonlyUnsealStrategy struct{}
+
+func (readonlyUnsealStrategy) unseal(
+	ctx context.Context, logger log.Logger, c *Core,
+) error {
+	c.logger.Debug("read-only unseal starting")
+
+	if err := postUnsealPhysical(c); err != nil {
 		return err
 	}
 	if err := c.setupPluginCatalog(ctx); err != nil {
@@ -2337,28 +2379,6 @@ func (s standardUnsealStrategy) unseal(ctx context.Context, logger log.Logger, c
 	}
 
 	if err := c.setupAuditedHeadersConfig(ctx); err != nil {
-		return err
-	}
-
-	if c.getClusterListener() != nil {
-		if err := c.setupRaftActiveNode(ctx); err != nil {
-			return err
-		}
-
-		if err := c.startForwarding(ctx); err != nil {
-			return err
-		}
-
-	}
-
-	c.clusterParamsLock.Lock()
-	defer c.clusterParamsLock.Unlock()
-
-	c.metricsCh = make(chan struct{})
-	go c.emitMetricsActiveNode(c.metricsCh)
-
-	// Establish version timestamps at the end of unseal on active nodes only.
-	if err := c.handleVersionTimeStamps(ctx); err != nil {
 		return err
 	}
 
@@ -2609,7 +2629,7 @@ func (c *Core) PhysicalSealConfigs(ctx context.Context) (*SealConfig, *SealConfi
 		if err := jsonutil.DecodeJSON(pe.Value, recoveryConf); err != nil {
 			return nil, nil, fmt.Errorf("failed to decode seal configuration at migration check time: %w", err)
 		}
-		err = recoveryConf.Validate()
+		err = recoveryConf.ValidateRecovery()
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to validate seal configuration at migration check time: %w", err)
 		}
@@ -3138,7 +3158,7 @@ func (c *Core) ResolveNamespaceFromRequest(nsHeader, reqPath string) (*namespace
 	c.stateLock.RLock()
 	defer c.stateLock.RUnlock()
 
-	if c.Sealed() || c.standby || c.namespaceStore == nil {
+	if c.Sealed() || c.namespaceStore == nil {
 		return nil, ""
 	}
 
@@ -3220,27 +3240,30 @@ func (c *Core) autoRotateBarrierLoop(ctx context.Context) {
 func (c *Core) checkBarrierAutoRotate(ctx context.Context) {
 	c.stateLock.RLock()
 	defer c.stateLock.RUnlock()
-	if c.isPrimary() {
-		reason, err := c.barrier.CheckBarrierAutoRotate(ctx)
-		if err != nil {
-			lf := c.logger.Error
-			if strings.HasSuffix(err.Error(), "context canceled") {
-				lf = c.logger.Debug
-			}
-			lf("error in barrier auto rotation", "error", err)
-			return
-		}
-		if reason != "" {
-			// Time to rotate.  Invoke the rotation handler in order to both rotate and create
-			// the replication canary
-			c.logger.Info("automatic barrier key rotation triggered", "reason", reason)
 
-			_, err := c.systemBackend.handleRotate(ctx, nil, nil)
-			if err != nil {
-				c.logger.Error("error automatically rotating barrier key", "error", err)
-			} else {
-				metrics.IncrCounter(barrierRotationsMetric, 1)
-			}
+	if !c.isPrimary() {
+		return
+	}
+
+	reason, err := c.barrier.CheckBarrierAutoRotate(ctx)
+	if err != nil {
+		lf := c.logger.Error
+		if strings.HasSuffix(err.Error(), "context canceled") {
+			lf = c.logger.Debug
+		}
+		lf("error in barrier auto rotation", "error", err)
+		return
+	}
+
+	if reason != "" {
+		// Time to rotate. Invoke the rotation handler in order to both rotate and create
+		// the replication canary
+		c.logger.Info("automatic barrier key rotation triggered", "reason", reason)
+
+		if err := c.systemBackend.rotateBarrierKey(ctx); err != nil {
+			c.logger.Error("error automatically rotating barrier key", "error", err)
+		} else {
+			metrics.IncrCounter(barrierRotationsMetric, 1)
 		}
 	}
 }
