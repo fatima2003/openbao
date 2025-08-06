@@ -1614,6 +1614,10 @@ func (b *RaftBackend) Delete(ctx context.Context, path string) error {
 		return err
 	}
 
+	if b.raft.State() != raft.Leader {
+		return errors.New(logical.ErrReadOnly.Error())
+	}
+
 	command := &LogData{
 		Operations: []*LogOperation{
 			{
@@ -1672,6 +1676,10 @@ func (b *RaftBackend) Put(ctx context.Context, entry *physical.Entry) error {
 
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+
+	if b.raft.State() != raft.Leader {
+		return errors.New(logical.ErrReadOnly.Error())
 	}
 
 	command := &LogData{

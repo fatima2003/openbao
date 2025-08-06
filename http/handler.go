@@ -852,12 +852,6 @@ func forwardRequest(core *vault.Core, w http.ResponseWriter, r *http.Request) {
 // case of an error.
 func request(core *vault.Core, w http.ResponseWriter, rawReq *http.Request, r *logical.Request) (*logical.Response, bool, bool) {
 	resp, err := core.HandleRequest(rawReq.Context(), r)
-	fmt.Printf("\n HandleRequest: \n resp: %v \n, err: %v \n", resp, err)
-
-	if errwrap.Contains(err, "node is not the leader") {
-		core.Logger().Debug("got issues handling request because we're a standby, forwarding", "error", err)
-		return resp, false, true
-	}
 
 	if errwrap.Contains(err, consts.ErrStandby.Error()) {
 		core.Logger().Debug("got issues handling request because we're a standby, forwarding", "error", err)
